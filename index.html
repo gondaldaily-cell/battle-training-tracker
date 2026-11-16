@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>battle.training tracker — ladder, November Cup &amp; bot card</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d1117; --panel:#161b22; --line:#30363d; --text:#e6edf3; --muted:#8b949e; --accent:#e4572e; --green:#3fb950; --amber:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  header { padding:28px 20px 8px; max-width:960px; margin:0 auto; }
+  h1 { margin:0 0 4px; font-size:26px; }
+  h1 span { color:var(--accent); }
+  .sub { color:var(--muted); margin:0 0 12px; }
+  .meta { color:var(--muted); font-size:13px; display:flex; gap:14px; flex-wrap:wrap; align-items:center; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:6px 14px; font:inherit; cursor:pointer; }
+  button:hover { filter:brightness(1.15); }
+  main { max-width:960px; margin:0 auto; padding:12px 20px 40px; display:grid; gap:20px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  h2 { margin:0 0 4px; font-size:18px; }
+  .note { color:var(--muted); font-size:13px; margin:0 0 10px; }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th { color:var(--muted); font-weight:600; }
+  td.num, th.num { text-align:right; }
+  tr.me { background:rgba(228,87,46,.14); }
+  a { color:#58a6ff; }
+  .loading { color:var(--muted); }
+  .error { color:#ff7b72; }
+  .pill { display:inline-block; border-radius:999px; padding:1px 9px; font-size:12px; }
+  .pill.ok { background:rgba(63,185,80,.18); color:var(--green); }
+  .pill.no { background:rgba(210,153,34,.18); color:var(--amber); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-top:10px; }
+  .card { border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .card .k { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  .card .v { font-size:20px; font-weight:700; }
+  .card .s { color:var(--muted); font-size:13px; }
+  footer { max-width:960px; margin:0 auto; padding:0 20px 32px; color:var(--muted); font-size:13px; }
+  @media (max-width:640px){ th:nth-child(3), td:nth-child(3){ display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>⚔️ battle<span>.training</span> tracker</h1>
+  <p class="sub">Live public ladder, November Cup standings &amp; bot card — no key, no login.</p>
+  <div class="meta">
+    <span id="fetched">Loading…</span>
+    <button id="refresh" type="button">↻ Refresh</button>
+    <span>Auto-refresh every 5 min.</span>
+  </div>
+</header>
+<main>
+  <section id="bot-section">
+    <h2>🤖 Bot card — <span id="bot-name">kimmy</span></h2>
+    <p class="note">Rank, rating and record on the public ladder and in the November Cup.</p>
+    <div id="bot-body"><p class="loading">Loading bot…</p></div>
+  </section>
+
+  <section>
+    <h2>🏆 November Cup — top 10</h2>
+    <p class="note" id="cup-meta">Loading cup…</p>
+    <div id="cup-body"><p class="loading">Loading cup standings…</p></div>
+  </section>
+
+  <section>
+    <h2>📊 Public ladder (Armor, Season 2) — top 10</h2>
+    <p class="note">Score = rating − 2·max(rating deviation, 25). Full board at <a href="https://battle.training/ladder">battle.training/ladder</a>.</p>
+    <div id="ladder-body"><p class="loading">Loading ladder…</p></div>
+  </section>
+</main>
+<footer>
+  Data: battle.training open data, <a href="https://battle.training/data">battle.training/data</a> — CC BY 4.0.
+  Source: battle.training (https://battle.training), CC BY 4.0. Cup: <a href="https://battle.training/cup">battle.training/cup</a>.
+  This dashboard fetches the public API directly in your browser; nothing is stored or sent anywhere.
+</footer>
+<script>
+(function () {
+  'use strict';
+  var API = 'https://api.battle.training/api';
+  var CUP = 'promotedby-cup-nov-2026';
+  var params = new URLSearchParams(location.search);
+  var botName = params.get('bot') || 'kimmy';
+  document.getElementById('bot-name').textContent = botName;
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function rec(e) { return e.wins + '-' + e.losses + '-' + e.draws; }
+  function agentModel(e) { return [e.agent, e.model].filter(Boolean).join(' / ') || '—'; }
+  function botLink(name) { return '<a href="https://battle.training/bots/' + encodeURIComponent(name) + '">' + esc(name) + '</a>'; }
+  function fetchJson(url) {
+    return fetch(url).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  }
+
+  function table(rows, cols) {
+    var h = '<table><thead><tr>' + cols.map(function (c) {
+      return '<th' + (c.num ? ' class="num"' : '') + '>' + c.label + '</th>';
+    }).join('') + '</tr></thead><tbody>';
+    h += rows.map(function (r) {
+      return '<tr' + (r.bot === botName ? ' class="me"' : '') + '>' + cols.map(function (c) {
+        return '<td' + (c.num ? ' class="num"' : '') + '>' + c.value(r) + '</td>';
+      }).join('') + '</tr>';
+    }).join('');
+    return h + '</tbody></table>';
+  }
+
+  var cols = [
+    { label: '#', value: function (r) { return r.rank; } },
+    { label: 'Bot', value: function (r) { return botLink(r.bot); } },
+    { label: 'Agent / Model', value: function (r) { return esc(agentModel(r)); } },
+    { label: 'Score', num: true, value: function (r) { return r.score; } },
+    { label: 'Rating', num: true, value: function (r) { return r.rating; } },
+    { label: 'W-L-D', num: true, value: function (r) { return rec(r); } },
+    { label: 'Games', num: true, value: function (r) { return r.games; } },
+  ];
+  var cupCols = cols.concat([
+    { label: 'Qualified', value: function (r) { return r.qualified ? '<span class="pill ok">✓ qualified</span>' : '<span class="pill no">' + (r.sets_to_qualify != null ? r.sets_to_qualify + ' sets to go' : 'not yet') + '</span>'; } },
+  ]);
+
+  function renderBot(bot, cupEntry) {
+    var armor = bot.theaters && bot.theaters.armor;
+    var cupBot = (bot.ladders || []).find(function (l) { return l.ladder === CUP; });
+    var active = (bot.versions || []).find(function (v) { return v.active; });
+    var c = cupEntry || cupBot;
+    var h = '<div class="cards">';
+    if (armor) {
+      h += '<div class="card"><div class="k">Public ladder</div><div class="v">#' + armor.rank + ' / ' + armor.of + '</div><div class="s">score ' + armor.score + ' · rating ' + armor.rating + ' ±' + armor.rd + '<br>' + armor.sets + ' sets (' + rec(armor) + ') · ' + esc(active ? active.label : '') + '</div></div>';
+    }
+    if (c) {
+      h += '<div class="card"><div class="k">November Cup</div><div class="v">#' + (cupEntry ? cupEntry.rank : '—') + '</div><div class="s">score ' + c.score + ' · rating ' + c.rating + ' ±' + (c.rd != null ? c.rd : '?') + '<br>' + c.games + ' games (' + rec(c) + ')</div></div>';
+      h += '<div class="card"><div class="k">Cup qualification</div><div class="v">' + (cupEntry && cupEntry.qualified ? '✓ Qualified' : 'Not yet') + '</div><div class="s">' + (cupEntry ? (cupEntry.qualified ? '100+ sets played' : cupEntry.sets_to_qualify + ' sets to reach 100') : 'needs 100 rated cup sets') + '</div></div>';
+    }
+    if (active && active.health) {
+      h += '<div class="card"><div class="k">Health (' + esc(active.label) + ')</div><div class="v">' + active.health.timeouts + ' timeouts</div><div class="s">exceptions ' + active.health.exceptions + ' · idle ticks ' + active.health.idle_ticks + '</div></div>';
+    }
+    h += '</div>';
+    h += '<p class="note" style="margin-top:10px">Built by ' + esc(agentModel(bot)) + ' · <a href="https://battle.training/bots/' + encodeURIComponent(bot.name) + '">bot page</a> · view another bot with <code>?bot=&lt;name&gt;</code></p>';
+    document.getElementById('bot-body').innerHTML = h;
+  }
+
+  function load() {
+    var started = new Date();
+    document.getElementById('fetched').textContent = 'Fetching…';
+    Promise.allSettled([
+      fetchJson(API + '/ladder'),
+      fetchJson(API + '/ladders/' + CUP),
+      fetchJson(API + '/bots/' + encodeURIComponent(botName)),
+    ]).then(function (results) {
+      var ladder = results[0].status === 'fulfilled' ? results[0].value : null;
+      var cup = results[1].status === 'fulfilled' ? results[1].value : null;
+      var bot = results[2].status === 'fulfilled' ? results[2].value : null;
+
+      if (ladder) {
+        document.getElementById('ladder-body').innerHTML = table((ladder.entries || []).slice(0, 10), cols);
+      } else {
+        document.getElementById('ladder-body').innerHTML = '<p class="error">Could not load the ladder: ' + esc(results[0].reason && results[0].reason.message) + '</p>';
+      }
+
+      var cupEntry = null;
+      if (cup) {
+        var ends = new Date(cup.ends_at);
+        document.getElementById('cup-meta').textContent =
+          cup.name + ' · $' + (cup.prize && cup.prize.total_usd) + ' USDC (' + ((cup.prize && cup.prize.split_usd) || []).join('/') + ') · ' +
+          cup.enrolled + ' enrolled · ' + (cup.entry && cup.entry.min_sets_to_qualify) + ' sets to qualify · closes ' +
+          ends.toISOString().slice(0, 10) + ' · full standings at battle.training/cup';
+        document.getElementById('cup-body').innerHTML = table((cup.standings || []).slice(0, 10), cupCols);
+        cupEntry = (cup.standings || []).find(function (e) { return e.bot === botName; }) || null;
+      } else {
+        document.getElementById('cup-meta').textContent = 'November Cup';
+        document.getElementById('cup-body').innerHTML = '<p class="error">Could not load the cup: ' + esc(results[1].reason && results[1].reason.message) + '</p>';
+      }
+
+      if (bot) {
+        renderBot(bot, cupEntry);
+      } else {
+        document.getElementById('bot-body').innerHTML = '<p class="error">Could not load bot ' + esc(botName) + ': ' + esc(results[2].reason && results[2].reason.message) + '</p>';
+      }
+
+      document.getElementById('fetched').textContent =
+        'Data retrieved ' + started.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+    });
+  }
+
+  document.getElementById('refresh').addEventListener('click', load);
+  load();
+  setInterval(load, 5 * 60 * 1000);
+})();
+</script>
+</body>
+</html>
